@@ -1,0 +1,177 @@
+The Comprehensive Checklist for Building Robust, Explainable Customer
+Churn Prediction Systems
+1. Data Acquisition and Quality Assessment
+●​
+
+●​
+●​
+●​
+●​
+●​
+●​
+●​
+●​
+
+●​
+●​
+●​
+●​
+
+Identify Multi-Channel Sources: Consolidate unstructured and structured data
+across all touchpoints, including CRM records, social media interactions, call center logs,
+service requests, chat messages, and mobile money transaction APIs.
+Assess Churn Types: Define specific target variables for the model based on
+business logic:
+Active vs. Passive Churn: Distinguish between explicit cancellations and non-renewal
+of subscriptions without communication.
+Voluntary vs. Involuntary Churn: Identify customers leaving due to dissatisfaction vs.
+payment failures (e.g., insufficient funds/expired cards).
+Revenue vs. Customer Churn: Separate the loss of total accounts from the loss of
+specific revenue streams (e.g., plan downgrades).
+Execute Data Cleaning Protocol:
+Remove constant features (e.g., Count, Country) that exhibit zero variance.
+Drop redundant identifiers and non-predictive labels like CustomerID and Phone
+Number.
+RETAIN geospatial features (Latitude, Longitude) and Churn Reason. Note: Retain
+Churn Reason as a categorical feature despite high missingness (73%), as it is a
+primary driver in SHAP analysis.
+Convert Total Charges and similar variables from object/string types to numeric formats,
+coercing errors to handle blank entries and feature sparsity.
+Implement Imputation:
+Apply median imputation for numerical features to mitigate the impact of right-skewed
+spending distributions and billing anomalies.
+Use "most frequent" (mode) imputation for categorical data to maintain the
+distribution of service usage and demographics.
+
+2. Feature Engineering and Domain Rationale
+●​ Construct Advanced Metrics:
+●​ AvgMonthlyCharge: Generate indicator by dividing Total Charges by (Tenure + 1) to
+capture spending intensity relative to the customer lifecycle and identify "bill shock" risks.
+●​ HasMultipleServices: Sum active service categories (Phone, Internet, Online Security,
+etc.) to quantify bundle complexity and switching costs.
+●​ Encoding Strategy:
+●​ Apply Ordinal Encoding to contract types (Month-to-month, 1-year, 2-year) to preserve
+the inherent hierarchy of customer commitment.
+●​ Use One-Hot Encoding for non-ordinal categorical variables like payment methods or
+internet service types.
+
+●​
+
+Geospatial Integration: Treat Latitude and Longitude as scaled numeric inputs to
+allow the model to learn non-linear regional churn clusters and geographic service
+effects.
+
+3. Class Imbalance and Leakage Prevention
+●​ Strict Leakage Control:
+●​ Split data into stratified training/validation/test sets (e.g., 80/20 or 64/16/20) before any
+oversampling is performed.
+●​ Ensure the test set reflects real-world imbalance (approx. 26.5% churn) to provide an
+unbiased Brier Score and ROC-AUC.
+●​ SMOTE Implementation: Address class imbalances in the training set using Synthetic
+Minority Over-sampling.
+●​ Set the neighborhood size to $k=5$ to balance local manifold structure with noise
+reduction.
+●​ Apply SMOTE exclusively to the training set after the stratified split.
+4. Iterative Model Development and Hyperparameter Tuning
+●​
+
+●​
+●​
+●​
+●​
+●​
+●​
+●​
+●​
+
+Iteration 1 (Baseline): Implement and benchmark a "Model Zoo" including XGBoost,
+Random Forest, LightGBM, Gradient Boosting, AdaBoost, Logistic Regression,
+and Multi-layer Perceptron (MLP) .
+MLP Architecture: Implement a 64-32-1 hidden layer structure using ReLU activation
+and L2 regularization (Alpha tuning).
+Optuna-based Optimization: Execute Bayesian optimization (50+ trials) to maximize
+ROC-AUC .
+Utilize a 3-fold stratified cross-validation on the training set.
+Deploy a Median Pruner to handle trial efficiency and early stopping for
+poor-performing configurations.
+Iteration 2 (SHAP-Driven Pruning):
+Generate SHAP values for the top-performing baseline to identify global feature
+importance.
+Retain only the top 20 features to prune the feature space.
+Target Metric: Achieve a ~28% reduction in training time while maintaining or
+improving validation AUC.
+
+5. Advanced Ensemble and Stacking Architectures
+●​
+
+Soft-Voting Ensemble: Average predicted probabilities from the top-tier boosting
+models ( XGBoost, LightGBM, and Gradient Boosting ) to reduce prediction variance.
+●​ Stacking Framework: Integrate five base classifiers ( Decision Tree, Random
+Forest, Extra Trees, Gradient Boosting, and XGBoost ) using a meta-classifier for
+final risk prediction.
+6. Probability Calibration and Business Metrics
+●​
+
+Calibration Protocol:
+
+●​ Apply Isotonic Regression for tree-based ensembles and the MLP to correct
+non-linear probability distortions.
+●​ Use Platt Scaling specifically for Logistic Regression to ensure probabilities align with
+actual churn frequencies.
+●​ Cost-Sensitive Evaluation: Define the business cost matrix using a 5:1 cost ratio .
+●​ Cost of False Negative ( $C_{FN}$ ) = 5: Represents the cost of losing the customer
+(Customer Lifetime Value).
+●​ Cost of False Positive ( $C_{FP}$ ) = 1: Represents the cost of retention intervention
+(e.g., a $20 discount/incentive).
+●​ Threshold Optimization: Identify the specific optimal decision threshold of 0.528 to
+maximize the balance between precision and recall while minimizing total business
+costs.
+7. Explainable AI (XAI) and SHAP Analysis
+●​ SHAP Explainer Selection:
+●​ Utilize TreeExplainer for all boosting and forest models for exact, efficient feature
+attribution.
+●​ Deploy KernelExplainer for the MLP and Logistic Regression models, utilizing a
+100-sample background set for computational tractability.
+●​ Global Interpretability: Rank features by mean absolute SHAP values (e.g., Contract
+type, Tenure, Churn Reason, Total day minutes).
+●​ Local Interpretability: Use SHAP Force Plots and Waterfall Plots to decompose
+individual customer risk (e.g., explaining why a specific customer has an 87% churn
+probability).
+●​ Counterfactual Analysis: Perform "What-If" simulations for retention.
+●​ Requirement: Verify if converting a customer to a 1-year contract successfully
+reduces churn probability by the 0.35 margin identified in research.
+8. Customer Segmentation and Targeted Retention
+●​
+●​
+●​
+●​
+●​
+●​
+
+Latent Representation: Use an Autoencoder with a symmetric encoder-decoder
+structure to learn 16-dimensional latent representations of customer behavior.
+Clustering Architecture: Apply K-Means (K=3) to the latent space to discover
+high-utility segments.
+Strategic Intervention Mapping: Match segment profiles to prescriptive actions:
+Electronic Check users: Launch "Payment Method Migration" campaigns to move
+users to automated billing.
+Fiber Optic users: Initiate "Service Quality Reviews" to address technical churn
+drivers.
+High-tenure/Price-sensitive users: Deploy loyalty rewards and personalized bundle
+incentives.
+
+9. Deployment and Market Interoperability
+●​
+
+API and Open Platforms: Ensure model integration with mobile money
+interoperability standards and wider financial ecosystems via open APIs.
+
+●​ Dashboarding: Deploy multi-level visualizations for stakeholder tiers:
+●​ Executive Dashboards: Aggregate SHAP summaries for strategic resource allocation.
+●​ Analyst Interaction Plots: Detailed feature interaction and dependence plots for
+root-cause analysis.
+●​ ROI Monitoring: Calculate financial impact by comparing the cost of interventions
+against preserved Customer Lifetime Value (CLV) and reduced customer acquisition
+costs.
+
+

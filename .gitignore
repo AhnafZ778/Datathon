@@ -1,0 +1,23 @@
+# Gitignore for Datathon repository
+
+# Exclude Datasets
+bkash-presents-nsucec-datathon/
+bkash-presents-nsuec-datathon/
+
+# Exclude local models and processed features (large files)
+processed_data/
+models/
+predictions/
+predictions.csv
+
+# Exclude python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS specific files
+.DS_Store
+Thumbs.db

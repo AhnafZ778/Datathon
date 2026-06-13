@@ -1,0 +1,11 @@
+feature,standalone_AUC,status
+out_count_feb,0.07472810744017822,✓ OK
+std_bal_march,0.34693202009542623,✓ OK
+balance_stability_march,0.1563862506877362,✓ OK
+final_balance_march,0.6786941580756014,✓ OK
+balance_trend_march,0.4683598055397714,✓ OK
+out_count_total,0.08895725663158084,✓ OK
+max_bal_march,0.5603286702564241,✓ OK
+out_count_jan,0.11023297345563762,✓ OK
+mean_bal_march,0.6244015116667117,✓ OK
+min_bal_march,0.687724652975079,✓ OK

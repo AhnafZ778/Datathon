@@ -1,0 +1,4 @@
+Segment,Count,Churn Rate (%),Avg Tenure (days),Avg Trx Count,Avg Trx Diversity,Avg March Balance,Avg Balance Trend,Avg Zero-Balance Days
+0,2901,0.0,1387.4,218.3,3.23,3038971.9,37345.3471,0.0
+1,486634,13.88,1397.0,42.6,2.69,19366.46,58.3837,17.5
+2,105465,7.5,1388.0,121.0,2.91,99964.32,956.6144,18.1

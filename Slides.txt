@@ -1,0 +1,971 @@
+P R E - C O M P E T I T I O N
+
+W O R K S H O P
+
+FictiPay Datathon
+Participant Kickoff
+Guide
+Data description · Problem phases · Evaluation strategy
+
+Theme: Data Science for the Rest of Us · Impact over Elegance · Outcomes over Algorithms
+
+The FictiPay Universe
+
+350M+
+
+80M
+
+200M+
+
+Active Wallets
+
+Daily Transactions
+
+Transaction Rows
+
+across Emergingland
+
+processed & scored
+
+in your dataset
+
+Your challenge: build a complete, production-grade churn prediction pipeline — not just a model. Every phase tests a
+distinct real-world engineering skill.
+
+ACCO UN T T YPES IN T HE DAT A
+
+•
+
+Customer (85%) — Retail wallet users — your churn prediction target
+
+•
+
+Merchant (10%) — Businesses accepting wallet payments
+
+•
+
+Biller ( 5%) — Utility companies receiving bill payments
+
+Your Dataset — Three Tables
+KYC
+
+ACCOUNT_ID
+
+ACCOUNT_TYPE
+
+ACCOUNT_OPEN_DATE
+
+GENDER
+
+REGION
+
+~2 million rows
+One row per account. Small enough to load eagerly into pandas.
+
+Transaction
+
+TrxID
+
+TRX_DATETIME
+
+SRC_ACCOUNT
+
+200 million+ rows
+Too large for RAM. Use Dask / Spark with column pruning.
+
+DayEndBalance
+
+ACCOUNT_ID
+
+~360 million rows (2 M accounts × 180 days)
+Largest table. Compute aggregations lazily — never load in full.
+
+DATE
+
+AVAILABLE_BALANCE
+
+DST_ACCOUNT
+
+TRX_TYPE
+
+TRX_AMT
+
+The 8-Phase Challenge
+Each phase tests a distinct real-world skill · 100 points total · Phase 5 is auto-scored
+
+1
+
+Big Data Handling
+
+2
+
+Feature Engineering
+
+3
+
+Feature Quality
+
+4
+
+Class Imbalance
+
+10 pts
+
+15 pts
+
+10 pts
+
+10 pts
+
+Dask/Spark · partitioning · sampling
+
+≥10 features · hypotheses · creativity
+
+Skew · Pareto · zero-inflation flags
+
+SMOTE · class_weight · undersampling
+
+5
+
+Model Training
+
+6
+
+Hyperparameter Tuning
+
+7
+
+Explainability
+
+8
+
+Business Recs
+
+20 pts ★ AUTO
+
+10 pts
+
+15 pts
+
+10 pts
+
+LightGBM · LR · AUC / P@K / R@K
+
+Optuna / Hyperopt · convergence plot
+
+SHAP values · leakage audit
+
+Decision rule · lift · interventions
+
+1
+
+Phase 1 — Big Data Handling
+
+O BJECT IV E
+
+10 pts
+
+EXA MPLE
+
+Ingest data that doesn't fit in RAM — correctly and reproducibly.
+KE Y T ASK S
+
+•
+
+Choose a framework (Dask / Spark) and justify the choice
+
+•
+
+Load all three tables with column pruning and partition-awareness
+
+•
+
+Document a sampling strategy for safe interactive EDA
+
+—
+
+Dask lazy loa d
+
+import dask.dataframe as dd
+trx = dd.read_parquet(
+"transactions/*.parquet",
+columns=["TrxID", "TRX_DATETIME",
+"SRC_ACCOUNT", "TRX_TYPE",
+"TRX_AMT"],
+# DST_ACCOUNT dropped → -15%
+IO
+engine="pyarrow",
+)
+# Nothing read yet — Dask builds a lazy graph
+print(trx.npartitions)
+# one partition per month
+
+HOW THI S P HAS E IS SC ORED
+
+framework_justified
+
+loading_efficiency
+
+sampling_documented
+
+/ 2 pts
+
+/ 4 pts
+
+/ 4 pts
+
+Rationale vs alternatives (Spark / Polars)
+
+Column pruning · partitioning · schema
+
+Reproducible strategy · size justified
+
+2
+
+Phase 2 — Feature Engineering
+
+15 pts
+
+O BJECT IV E
+
+EXA MPLE
+
+Craft ≥ 10 behavioral features. Each must have a testable hypothesis about why
+it predicts churn.
+
+Feature
+
+Window
+
+Hypothesis
+
+recency_days
+
+90d
+
+Long gaps signal disengagement
+
+freq_30d
+
+30d
+
+Monthly count captures habit rate
+
+bill_pay_ratio
+
+90d
+
+Bill payments anchor customers
+
+balance_trend
+
+90d
+
+Declining balance = wallet drained
+
+service_diversity
+
+90d
+
+More types = deeper adoption
+
+KE Y T ASK S
+
+•
+
+Cover recency, frequency, monetary, balance, type-ratio, and tenure
+
+•
+
+Justify every feature — generic rationales score 0
+
+•
+
+Deliverable: Markdown/PDF feature catalog
+
+—
+
+Featur e catalo g (5 o f ≥10 )
+
+HOW THI S P HAS E IS SC ORED
+
+feature_count
+
+feature_rationale
+
+feature_creativity
+
+/ 5 pts
+
+/ 5 pts
+
+/ 5 pts
+
+0 pts <10 · 3 pts 10–14 · 5 pts ≥15
+
+Specific behavioral hypothesis per feature
+
+Novel features beyond the problem hints
+
+3
+
+Phase 3 — Feature Quality & Pareto
+
+10 pts
+
+O BJECT IV E
+
+EXA MPLE
+
+Every feature the model sees must have a well-behaved distribution. Raw
+financial data is never clean.
+
+Feature
+
+Skew raw
+
+Transform
+
+Skew after
+
+freq_7d
+
++1.37
+
+log1p
+
+−0.03 ✓
+
+TRX_AMT
+
++4.12
+
+log1p
+
++0.21 ✓
+
+balance_trend
+
++6.8
+
+Winsorise
+
++0.44 ✓
+
+bill_pay_ratio
+
+42% zeros
+
+→ flag
+
+Binary flag
+
+KE Y T ASK S
+
+•
+
+Plot distributions; annotate skewness and zero fraction
+
+•
+
+Apply log1p, winsorise, or clip to skewed features (|skew| > 1)
+
+•
+
+Add indicator flags for zero-inflated features (>20% zeros)
+
+—
+
+S k ewn ess red ucti on
+
+HOW THI S P HAS E IS SC ORED
+
+distribution_analysis
+
+transformations
+
+sparsity_handling
+
+/ 4 pts
+
+/ 3 pts
+
+/ 3 pts
+
+Plots with skew/Pareto annotated
+
+Before/after comparison per feature
+
+Indicator flags with semantic rationale
+
+4
+
+Phase 4 — Class Imbalance & Sampling
+
+10 pts
+
+O BJECT IV E
+
+EXA MPLE
+
+~5% churn rate. A model that predicts 'never churn' gets 95% accuracy — and is
+useless.
+
+Strategy
+
+CV AUC
+
+Prec@10%
+
+Rec@10%
+
+No resampling
+
+0.831
+
+0.312
+
+0.542
+
+class_weight='balanced'
+
+0.863
+
+0.387
+
+0.671
+
+Undersampling
+
+0.847
+
+0.358
+
+0.621
+
+SMOTE
+
+0.851
+
+0.368
+
+0.639
+
+KE Y T ASK S
+
+•
+
+Quantify imbalance; explain why accuracy is the wrong metric
+
+•
+
+Compare ≥2 strategies: SMOTE, undersampling, class_weight
+
+•
+
+Justify final choice in terms of precision / recall trade-off
+
+—
+
+S trat egy co mpar iso n (CV)
+
+HOW THI S P HAS E IS SC ORED
+
+prevalence_quantified
+
+methods_compared
+
+approach_justified
+
+/ 2 pts
+
+/ 4 pts
+
+/ 4 pts
+
+Rate stated & contextualised
+
+≥2 methods with metric comparison
+
+Tied to FP vs FN business cost
+
+5
+
+Phase 5 — Model Selection & Training
+
+20 pts ★ AUTO-SCORED
+
+O BJECT IV E
+
+EXA MPLE
+
+Train models that balance performance and scalability. Report correct metrics
+— not accuracy.
+
+Model
+
+AUC
+
+AP
+
+P@10%
+
+Lift
+
+Logistic Regression
+
+0.812
+
+0.324
+
+0.284
+
+3.2×
+
+LightGBM (default)
+
+0.856
+
+0.371
+
+0.371
+
+4.1×
+
+LightGBM (tuned) ★
+
+0.891
+
+0.412
+
+0.412
+
+4.6×
+
+KE Y T ASK S
+
+•
+
+Train ≥2 models: e.g. LightGBM and Logistic Regression
+
+•
+
+Evaluate on a held-out test set: AUC-ROC, Avg Precision, Prec@K,
+
+—
+
+Mo del co mp ariso n (test set )
+
+Recall@K
+•
+
+Submit predictions.csv — this stage is AUTO-SCORED by the evaluator
+
+HOW THI S P HAS E IS SC ORED
+
+AUC-ROC
+
+Avg Precision
+
+Prec@10%
+
+Recall@10%
+
+/ 8 pts
+
+/ 5 pts
+
+/ 4 pts
+
+/ 3 pts
+
+40% weight in composite score
+
+25% weight — handles imbalance
+
+20% weight — top-decile accuracy
+
+15% weight — churn coverage
+
+6
+
+Phase 6 — Hyperparameter Tuning
+
+O BJECT IV E
+
+EXA MPLE
+
+Improve model performance efficiently. Exhaustive grid search is not acceptable
+at scale.
+KE Y T ASK S
+
+•
+
+10 pts
+
+Implement Bayesian optimisation (Optuna / Hyperopt) or randomised
+search
+
+•
+
+Show improvement over defaults on the same validation set
+
+•
+
+Plot CV score vs iteration and report best parameters
+
+—
+
+Opt una o bject ive
+
+import optuna
+def objective(trial):
+params = {
+"max_depth"
+: trial.suggest_int("max_depth", 3,
+8),
+"learning_rate": trial.suggest_float(
+"lr", 0.005, 0.3, log=True),
+"num_leaves"
+: trial.suggest_int("num_leaves",
+16, 128),
+}
+return cross_val_score(
+LGBMClassifier(**params, class_weight="balanced"),
+X_train, y_train, cv=5, scoring="roc_auc"
+).mean()
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=100)
+# Default AUC 0.856 → Tuned AUC 0.891 (+0.035)
+
+HOW THI S P HAS E IS SC ORED
+
+search_implemented
+
+improvement_shown
+
+tuning_tracked
+
+/ 4 pts
+
+/ 3 pts
+
+/ 3 pts
+
+Bayesian (4 pts) · Random (2 pts)
+
+Before/after on same validation set
+
+Convergence chart + best params
+
+7
+
+Phase 7 — Model Explainability
+
+O BJECT IV E
+
+15 pts
+
+EXA MPLE
+
+A model stakeholders can't understand is a model they won't trust — or use.
+KE Y T ASK S
+
+•
+
+Compute SHAP values; produce a beeswarm summary plot
+
+•
+
+Explain top drivers in plain business language; flag counter-intuitive ones
+
+•
+
+Audit for data leakage — any feature using post-reference data?
+
+—
+
+SHAP featur e imp or tance
+
+#
+
+Feature
+
+|SHAP|
+
+Direction
+
+1
+
+freq_30d
+
+0.423
+
+↓ churn — protective
+
+2
+
+recency_days
+
+0.381
+
+↑ churn — risk signal
+
+3
+
+bill_pay_ratio
+
+0.314
+
+↓ churn — anchors user
+
+4
+
+avg_amt_30d
+
+0.271
+
+↓ churn — high spender
+
+5
+
+std_amt_30d
+
+0.248
+
+↓ churn ← counterintuitive!
+
+HOW THI S P HAS E IS SC ORED
+
+shap_provided
+
+insights_discussed
+
+leakage_checked
+
+/ 5 pts
+
+/ 5 pts
+
+/ 5 pts
+
+Beeswarm + dependence plots
+
+Business language · counter-intuitive
+
+Systematic audit · time-split check
+
+8
+
+Phase 8 — Business Recommendations
+
+O BJECT IV E
+
+EXA MPLE
+
+Translate model output into decisions a non-technical executive can act on.
+KE Y T ASK S
+
+•
+
+Propose a decision rule (e.g. flag top 10%) with a lift estimate
+
+•
+
+Suggest targeted interventions tied directly to SHAP feature insights
+
+•
+
+Summarise in a 5-slide deck or dashboard mock-up
+
+10 pts
+
+—
+
+Lift table
+
+Top %
+
+Customers
+
+Prec
+
+Recall
+
+Lift
+
+5%
+
+3,500
+
+0.38
+
+0.57
+
+7.6×
+
+10%
+
+7,000
+
+0.29
+
+0.87
+
+5.8× ← rule
+
+20%
+
+14,000
+
+0.18
+
+0.72
+
+3.6×
+
+HOW THI S P HAS E IS SC ORED
+
+decision_rule
+
+interventions
+
+presentation_quality
+
+/ 3 pts
+
+/ 4 pts
+
+/ 3 pts
+
+Threshold + lift + cost frame
+
+Tied to SHAP insights; not generic
+
+Executive-ready · clear · actionable
+
+How Submissions Are Scored
+#
+
+Stage
+
+Pts
+
+How
+
+Key evaluation criteria
+
+1
+
+Big Data Handling
+
+10
+
+Human
+
+Framework choice · efficiency · sampling
+
+2
+
+Feature Engineering
+
+15
+
+Human
+
+Count ≥10 · rationale · creativity
+
+3
+
+Feature Quality
+
+10
+
+Human
+
+Distributions · transforms · sparsity
+
+4
+
+Class Imbalance
+
+10
+
+Human
+
+Methods compared · justification
+
+5
+
+Model Training
+
+20
+
+AUTO ★
+
+AUC×0.40 + AP×0.25 + P@10%×0.20 + R@10%×0.15
+
+6
+
+Hyperpar. Tuning
+
+10
+
+Human
+
+Search method · improvement · convergence chart
+
+7
+
+Explainability
+
+15
+
+Human
+
+SHAP plots · insights · leakage audit
+
+8
+
+Business Recs
+
+10
+
+Human
+
+Decision rule · interventions · presentation
+
+TOTAL
+
+100
+
+Key principle: A team with brilliant engineering but a moderate model can outscore a team with a top AUC and no rigour elsewhere.
+80 of the 100 points are human-judged.
+
+predictions.csv
+ACCOUNT_ID + CHURN_PROB ← AUTO-SCORED
+
+Submission
+Checklist
+
+features.md
+Feature catalog: ≥10 features with rationales
+
+notebook.ipynb
+End-to-end runnable code (or .py pipeline)
+
+report.pdf
+Model metrics tables + tuning convergence chart
+
+All files must be present
+before your score is computed.
+
+explainability/
+shap_summary.png + dependence plots
+
+presentation.pdf
+5-slide executive summary (.pptx accepted)
+
+Good luck · Build something that matters
+
+
