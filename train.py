@@ -176,18 +176,22 @@ def train_lgb(X, y, X_test, cv, class_weight=None):
         X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
         X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
         
-        # Deeper tree parameters for high performance
+        # Tuned tree parameters with regularization
         params = {
             "objective": "binary",
             "metric": "auc",
             "boosting_type": "gbdt",
-            "n_estimators": 1500,
-            "learning_rate": 0.03,
-            "num_leaves": 63,
-            "max_depth": 8,
-            "min_child_samples": 30,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
+            "n_estimators": 3000,
+            "learning_rate": 0.02,
+            "num_leaves": 127,
+            "max_depth": 9,
+            "min_child_samples": 20,
+            "min_child_weight": 0.01,
+            "subsample": 0.75,
+            "subsample_freq": 1,
+            "colsample_bytree": 0.7,
+            "reg_alpha": 0.1,
+            "reg_lambda": 1.0,
             "random_state": RANDOM_STATE + fold,
             "verbose": -1
         }
@@ -234,14 +238,18 @@ def train_xgb(X, y, X_test, cv, class_weight=None):
         params = {
             "objective": "binary:logistic",
             "eval_metric": "auc",
-            "n_estimators": 1500,
-            "learning_rate": 0.03,
-            "max_depth": 7,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "min_child_weight": 5,
+            "n_estimators": 3000,
+            "learning_rate": 0.02,
+            "max_depth": 8,
+            "subsample": 0.75,
+            "colsample_bytree": 0.7,
+            "min_child_weight": 3,
+            "gamma": 0.1,
+            "reg_alpha": 0.1,
+            "reg_lambda": 1.0,
+            "max_delta_step": 1,
             "random_state": RANDOM_STATE + fold,
-            "early_stopping_rounds": 100
+            "early_stopping_rounds": 150
         }
         params.update(gpu_params)
         
@@ -287,13 +295,14 @@ def train_catboost(X, y, X_test, cv, class_weight=None):
         X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
         
         params = {
-            "iterations": 1500,
-            "learning_rate": 0.03,
-            "depth": 7,
+            "iterations": 3000,
+            "learning_rate": 0.02,
+            "depth": 8,
             "eval_metric": "AUC",
             "random_seed": RANDOM_STATE + fold,
-            "l2_leaf_reg": 5,
-            "early_stopping_rounds": 100
+            "l2_leaf_reg": 3,
+            "bagging_temperature": 0.8,
+            "early_stopping_rounds": 150
         }
         params.update(gpu_params)
         
@@ -329,10 +338,12 @@ def train_rf(X, y, X_test, cv):
         X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
         X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
         
-        # Deeper forest since we are in high resource mode
+        # Deeper forest with regularization
         model = RandomForestClassifier(
-            n_estimators=150,
-            max_depth=12,
+            n_estimators=500,
+            max_depth=15,
+            min_samples_leaf=10,
+            max_features="sqrt",
             random_state=RANDOM_STATE + fold,
             n_jobs=-1,
             class_weight="balanced"
@@ -396,10 +407,11 @@ def train_linear_models(X, y, X_test, cv):
         
         # Deeper neural network for PC version
         model = MLPClassifier(
-            hidden_layer_sizes=(128, 64),
+            hidden_layer_sizes=(256, 128, 64),
             activation="relu",
-            max_iter=150,
-            alpha=0.001,
+            max_iter=200,
+            alpha=0.0005,
+            batch_size=1024,
             random_state=RANDOM_STATE + fold,
             early_stopping=True
         )

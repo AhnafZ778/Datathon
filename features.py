@@ -173,16 +173,17 @@ def compute_advanced_march_features(target_ids):
     return march_adv
 
 
-def aggregate_transactions_one_month(filepath, month, target_ids):
-    """Process a SINGLE month of transactions — minimal memory footprint.
-    Does NOT load TRX_DATETIME (handled separately in compute_recency)."""
+def aggregate_transactions_one_month(filepath, month, target_ids, kyc_type_map=None):
+    """Process a SINGLE month of transactions with comprehensive feature extraction.
+    Loads TRX_DATETIME for temporal features (active days, hour patterns)."""
     print(f"  Aggregating {month} transactions ({os.path.basename(filepath)})...")
     
-    # Only load what we need for aggregation — NO datetime column
-    df = pd.read_parquet(filepath, columns=["SRC_ACCOUNT", "DST_ACCOUNT", "TRX_TYPE", "TRX_AMT"])
+    # Load ALL columns for full feature extraction
+    df = pd.read_parquet(filepath, columns=["SRC_ACCOUNT", "DST_ACCOUNT", "TRX_TYPE", "TRX_AMT", "TRX_DATETIME"])
+    df["TRX_DATETIME"] = pd.to_datetime(df["TRX_DATETIME"])
     
     # ---- Outbound (SRC) ----
-    df_src = df[df["SRC_ACCOUNT"].isin(target_ids)]
+    df_src = df[df["SRC_ACCOUNT"].isin(target_ids)].copy()
     
     out_grp = df_src.groupby("SRC_ACCOUNT")
     out_agg = out_grp["TRX_AMT"].agg(
@@ -190,25 +191,119 @@ def aggregate_transactions_one_month(filepath, month, target_ids):
         out_sum="sum",
         out_avg="mean",
         out_std="std",
-        out_max="max"
+        out_max="max",
+        out_median="median"
     )
     out_agg.index.name = "ACCOUNT_ID"
     out_agg["out_std"] = out_agg["out_std"].fillna(0)
     
+    # Per-type counts (existing)
     type_counts = df_src.groupby(["SRC_ACCOUNT", "TRX_TYPE"]).size().unstack(fill_value=0)
     type_counts.index.name = "ACCOUNT_ID"
     type_counts.columns = [f"count_{col}_{month}" for col in type_counts.columns]
     
+    # === NEW: Per-type monetary SUMS ===
+    type_sums = df_src.groupby(["SRC_ACCOUNT", "TRX_TYPE"])["TRX_AMT"].sum().unstack(fill_value=0)
+    type_sums.index.name = "ACCOUNT_ID"
+    type_sums.columns = [f"sum_{col}_{month}" for col in type_sums.columns]
+    
+    # === NEW: Graph/Network features (outbound) ===
+    # Unique destination counterparties
+    unique_dst = df_src.groupby("SRC_ACCOUNT")["DST_ACCOUNT"].nunique()
+    unique_dst.index.name = "ACCOUNT_ID"
+    unique_dst.name = f"unique_dst_{month}"
+    
+    # Unique destinations by type (merchant, biller, P2P)
+    if kyc_type_map is not None:
+        df_src["DST_TYPE"] = df_src["DST_ACCOUNT"].map(kyc_type_map).fillna("Unknown")
+        for acct_type in ["Merchant", "Biller"]:
+            type_mask = df_src["DST_TYPE"] == acct_type
+            type_unique = df_src[type_mask].groupby("SRC_ACCOUNT")["DST_ACCOUNT"].nunique()
+            type_unique.index.name = "ACCOUNT_ID"
+            type_unique.name = f"unique_{acct_type.lower()}_{month}"
+            out_agg = out_agg.join(type_unique, how="left")
+        # P2P unique recipients (Customer-to-Customer)
+        p2p_mask = df_src["TRX_TYPE"] == "P2P"
+        p2p_unique = df_src[p2p_mask].groupby("SRC_ACCOUNT")["DST_ACCOUNT"].nunique()
+        p2p_unique.index.name = "ACCOUNT_ID"
+        p2p_unique.name = f"unique_p2p_dst_{month}"
+        out_agg = out_agg.join(p2p_unique, how="left")
+    
+    # Counterparty concentration: top-1 destination share of total volume
+    dst_vol = df_src.groupby(["SRC_ACCOUNT", "DST_ACCOUNT"])["TRX_AMT"].sum()
+    total_vol = dst_vol.groupby("SRC_ACCOUNT").sum()
+    top1_vol = dst_vol.groupby("SRC_ACCOUNT").max()
+    top1_share = (top1_vol / (total_vol + 1e-5))
+    top1_share.index.name = "ACCOUNT_ID"
+    top1_share.name = f"top1_dst_share_{month}"
+    out_agg = out_agg.join(top1_share, how="left")
+    
+    # HHI (Herfindahl-Hirschman Index) of destination concentration
+    dst_shares = dst_vol.groupby("SRC_ACCOUNT").apply(
+        lambda x: ((x / (x.sum() + 1e-5)) ** 2).sum()
+    )
+    dst_shares.index.name = "ACCOUNT_ID"
+    dst_shares.name = f"hhi_dst_{month}"
+    out_agg = out_agg.join(dst_shares, how="left")
+    del dst_vol, total_vol, top1_vol, top1_share, dst_shares
+    
+    # === NEW: Temporal features (outbound) ===
+    df_src["hour"] = df_src["TRX_DATETIME"].dt.hour
+    df_src["date"] = df_src["TRX_DATETIME"].dt.date
+    
+    # Active days (distinct dates with transactions)
+    active_days = df_src.groupby("SRC_ACCOUNT")["date"].nunique()
+    active_days.index.name = "ACCOUNT_ID"
+    active_days.name = f"active_days_{month}"
+    out_agg = out_agg.join(active_days, how="left")
+    
+    # Hour-of-day std (behavioral regularity)
+    hour_std = df_src.groupby("SRC_ACCOUNT")["hour"].std().fillna(0)
+    hour_std.index.name = "ACCOUNT_ID"
+    hour_std.name = f"trx_hour_std_{month}"
+    out_agg = out_agg.join(hour_std, how="left")
+    
+    # % of transactions in business hours (9am-5pm)
+    df_src["is_business"] = df_src["hour"].between(9, 17).astype(int)
+    biz_pct = df_src.groupby("SRC_ACCOUNT")["is_business"].mean()
+    biz_pct.index.name = "ACCOUNT_ID"
+    biz_pct.name = f"pct_business_hours_{month}"
+    out_agg = out_agg.join(biz_pct, how="left")
+    
     del df_src
+    gc.collect()
     
     # ---- Inbound (DST) ----
-    df_dst = df[df["DST_ACCOUNT"].isin(target_ids)]
+    df_dst = df[df["DST_ACCOUNT"].isin(target_ids)].copy()
     
+    # === ENRICHED: Full inbound stats ===
     in_agg = df_dst.groupby("DST_ACCOUNT")["TRX_AMT"].agg(
         in_count="count",
-        in_sum="sum"
+        in_sum="sum",
+        in_avg="mean",
+        in_std="std",
+        in_max="max"
     )
     in_agg.index.name = "ACCOUNT_ID"
+    in_agg["in_std"] = in_agg["in_std"].fillna(0)
+    
+    # Unique source counterparties (in-degree)
+    unique_src = df_dst.groupby("DST_ACCOUNT")["SRC_ACCOUNT"].nunique()
+    unique_src.index.name = "ACCOUNT_ID"
+    unique_src.name = f"unique_src_{month}"
+    in_agg = in_agg.join(unique_src, how="left")
+    
+    # Inbound per-type counts
+    in_type_counts = df_dst.groupby(["DST_ACCOUNT", "TRX_TYPE"]).size().unstack(fill_value=0)
+    in_type_counts.index.name = "ACCOUNT_ID"
+    in_type_counts.columns = [f"in_count_{col}_{month}" for col in in_type_counts.columns]
+    
+    # Inbound active days
+    df_dst["date"] = pd.to_datetime(df_dst["TRX_DATETIME"]).dt.date
+    in_active_days = df_dst.groupby("DST_ACCOUNT")["date"].nunique()
+    in_active_days.index.name = "ACCOUNT_ID"
+    in_active_days.name = f"in_active_days_{month}"
+    in_agg = in_agg.join(in_active_days, how="left")
     
     del df_dst, df
     gc.collect()
@@ -218,15 +313,26 @@ def aggregate_transactions_one_month(filepath, month, target_ids):
     month_agg.index.name = "ACCOUNT_ID"
     month_agg = month_agg.join(out_agg, how="left").fillna(0)
     month_agg = month_agg.join(type_counts, how="left").fillna(0)
+    month_agg = month_agg.join(type_sums, how="left").fillna(0)
+    month_agg = month_agg.join(unique_dst, how="left").fillna(0)
     month_agg = month_agg.join(in_agg, how="left").fillna(0)
+    month_agg = month_agg.join(in_type_counts, how="left").fillna(0)
     
-    del out_agg, type_counts, in_agg
+    # === NEW: In/Out ratio ===
+    month_agg["in_out_ratio"] = month_agg["in_count"] / (month_agg["out_count"] + 1)
+    
+    del out_agg, type_counts, type_sums, unique_dst, in_agg, in_type_counts
     gc.collect()
     
-    # Rename columns with month suffix (skip type_counts already suffixed)
+    # Rename columns with month suffix (skip already-suffixed columns)
     new_cols = []
     for col in month_agg.columns:
-        if col.startswith("count_") and col.endswith(f"_{month}"):
+        already_suffixed = False
+        for sfx in [f"_{month}", f"_{month}"]:
+            if col.endswith(sfx):
+                already_suffixed = True
+                break
+        if already_suffixed:
             new_cols.append(col)
         else:
             new_cols.append(f"{col}_{month}")
@@ -235,7 +341,7 @@ def aggregate_transactions_one_month(filepath, month, target_ids):
     return month_agg
 
 
-def aggregate_transactions(target_ids):
+def aggregate_transactions(target_ids, kyc_type_map=None):
     """Aggregate transactions across all available months, one at a time."""
     print("Aggregating transactions (memory-safe, one month at a time)...")
     trx_files = sorted(glob.glob(os.path.join(base_path, "transactions", "*.parquet")))
@@ -248,7 +354,7 @@ def aggregate_transactions(target_ids):
             break
         month = months[month_idx]
         
-        month_df = aggregate_transactions_one_month(filepath, month, target_ids)
+        month_df = aggregate_transactions_one_month(filepath, month, target_ids, kyc_type_map)
         
         if trx_agg is None:
             trx_agg = month_df
@@ -266,7 +372,13 @@ def aggregate_transactions(target_ids):
     trx_agg["in_count_total"] = sum(trx_agg.get(f"in_count_{m}", 0) for m in available_months)
     trx_agg["in_sum_total"] = sum(trx_agg.get(f"in_sum_{m}", 0) for m in available_months)
     
-    # Decay features
+    # Total active days across all months
+    trx_agg["active_days_total"] = sum(trx_agg.get(f"active_days_{m}", 0) for m in available_months)
+    
+    # Total unique destinations across all months
+    trx_agg["unique_dst_total"] = sum(trx_agg.get(f"unique_dst_{m}", 0) for m in available_months)
+    
+    # Decay features (count-based)
     if "out_count_jan" in trx_agg.columns and "out_count_feb" in trx_agg.columns:
         trx_agg["trx_count_decay_jan_feb"] = (
             (trx_agg["out_count_feb"] - trx_agg["out_count_jan"]) / (trx_agg["out_count_jan"] + 1)
@@ -280,12 +392,40 @@ def aggregate_transactions(target_ids):
             (trx_agg["out_count_march"] - trx_agg["out_count_jan"]) / (trx_agg["out_count_jan"] + 1)
         )
     
+    # === NEW: Per-type SPEND decay (feb → march) ===
+    trx_types = ["P2P", "MerchantPay", "BillPay", "CashIn", "CashOut"]
+    for ttype in trx_types:
+        feb_col = f"sum_{ttype}_feb"
+        mar_col = f"sum_{ttype}_march"
+        if feb_col in trx_agg.columns and mar_col in trx_agg.columns:
+            trx_agg[f"{ttype.lower()}_spend_decay_feb_march"] = (
+                (trx_agg[mar_col] - trx_agg[feb_col]) / (trx_agg[feb_col] + 1)
+            )
+        # Per-type count decay
+        feb_cnt = f"count_{ttype}_feb"
+        mar_cnt = f"count_{ttype}_march"
+        if feb_cnt in trx_agg.columns and mar_cnt in trx_agg.columns:
+            trx_agg[f"{ttype.lower()}_count_decay_feb_march"] = (
+                (trx_agg[mar_cnt] - trx_agg[feb_cnt]) / (trx_agg[feb_cnt] + 1)
+            )
+    
+    # === NEW: Network diversity decay ===
+    if "unique_dst_feb" in trx_agg.columns and "unique_dst_march" in trx_agg.columns:
+        trx_agg["unique_dst_decay_feb_march"] = (
+            (trx_agg["unique_dst_march"] - trx_agg["unique_dst_feb"]) / (trx_agg["unique_dst_feb"] + 1)
+        )
+    
+    # === NEW: Active days decay ===
+    if "active_days_feb" in trx_agg.columns and "active_days_march" in trx_agg.columns:
+        trx_agg["active_days_decay_feb_march"] = (
+            (trx_agg["active_days_march"] - trx_agg["active_days_feb"]) / (trx_agg["active_days_feb"] + 1)
+        )
+    
     # March activity share
     if "out_count_march" in trx_agg.columns:
         trx_agg["march_activity_share"] = trx_agg["out_count_march"] / (trx_agg["out_count_total"] + 1e-5)
     
     # Service diversity
-    trx_types = ["P2P", "MerchantPay", "BillPay", "CashIn", "CashOut"]
     for ttype in trx_types:
         total = 0
         for m in available_months:
@@ -293,6 +433,15 @@ def aggregate_transactions(target_ids):
             if col in trx_agg.columns:
                 total = total + trx_agg[col]
         trx_agg[f"count_{ttype}_total"] = total
+    
+    # Per-type sum totals
+    for ttype in trx_types:
+        total = 0
+        for m in available_months:
+            col = f"sum_{ttype}_{m}"
+            if col in trx_agg.columns:
+                total = total + trx_agg[col]
+        trx_agg[f"sum_{ttype}_total"] = total
     
     total_type_cols = [f"count_{ttype}_total" for ttype in trx_types]
     trx_agg["trx_type_diversity"] = (trx_agg[total_type_cols] > 0).sum(axis=1)
@@ -463,6 +612,13 @@ def build_features(sample_fraction=1.0, seed=42):
     kyc_df = load_kyc(target_ids)
     gc.collect()
     
+    # === NEW: Load KYC type map for graph/network features ===
+    print("Loading KYC type map for network features...")
+    kyc_full = pd.read_parquet(os.path.join(base_path, "kyc.parquet"), columns=["ACCOUNT_ID", "ACCOUNT_TYPE"])
+    kyc_type_map = kyc_full.set_index("ACCOUNT_ID")["ACCOUNT_TYPE"].to_dict()
+    del kyc_full
+    gc.collect()
+    
     # 2. Recency (lightweight pass across all 3 months)
     recency_df = compute_recency(target_ids)
     gc.collect()
@@ -471,8 +627,9 @@ def build_features(sample_fraction=1.0, seed=42):
     march_adv_df = compute_advanced_march_features(target_ids)
     gc.collect()
     
-    # 4. General transaction aggregations (Jan + Feb + March sums/counts)
-    trx_df = aggregate_transactions(target_ids)
+    # 4. General transaction aggregations (Jan + Feb + March sums/counts + graph features)
+    trx_df = aggregate_transactions(target_ids, kyc_type_map)
+    del kyc_type_map
     trx_df = trx_df.join(recency_df, how="left")
     trx_df["days_since_last_trx"] = trx_df["days_since_last_trx"].fillna(90)
     del recency_df
@@ -501,12 +658,29 @@ def build_features(sample_fraction=1.0, seed=42):
     if "out_count_last_7d" in features.columns:
         features["flag_zero_trx_last_7d_march"] = (features["out_count_last_7d"] == 0).astype(float)
     
+    # === NEW: Balance-Transaction Interaction Features ===
+    print("Computing balance-transaction interaction features...")
+    if "mean_bal_march" in features.columns and "out_sum_march" in features.columns:
+        features["balance_to_spend_ratio_march"] = features["mean_bal_march"] / (features["out_sum_march"] + 1)
+        features["trx_intensity_march"] = features["out_count_march"] / (features["mean_bal_march"] + 1)
+        features["balance_per_trx_march"] = features["mean_bal_march"] / (features["out_count_march"] + 1)
+    
+    if "mean_bal_feb" in features.columns and "out_sum_feb" in features.columns:
+        features["balance_to_spend_ratio_feb"] = features["mean_bal_feb"] / (features["out_sum_feb"] + 1)
+    
+    # Balance runway: final balance / average daily spend
+    if "final_balance_march" in features.columns and "out_sum_march" in features.columns:
+        features["balance_runway_march"] = features["final_balance_march"] / (features["out_sum_march"] / 31 + 1)
+    
     # 8. Log transforms for skewed monetary columns
     skewed_cols = [
         "out_sum_total", "in_sum_total", "out_sum_march", "in_sum_march",
         "mean_bal_march", "std_bal_march", "final_balance_march",
         "out_sum_last_7d", "out_sum_last_14d", "in_sum_last_7d", "in_sum_last_14d",
-        "mean_balance_last_7d_march", "mean_balance_last_14d_march"
+        "mean_balance_last_7d_march", "mean_balance_last_14d_march",
+        "out_sum_jan", "out_sum_feb", "in_sum_jan", "in_sum_feb",
+        "sum_MerchantPay_total", "sum_BillPay_total", "sum_P2P_total",
+        "balance_to_spend_ratio_march", "balance_runway_march"
     ]
     for col in skewed_cols:
         if col in features.columns:
